@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h> // 디렉터리 순회용
+#include <ctype.h>  // isdigit()
+#include <limits.h> // PATH_MAX
 
 #define PROC_LOADAVG "/proc/loadavg"
 #define PROC_UPTIME "/proc/uptime"
@@ -13,9 +16,11 @@
 #define ANSI_HOME       "\033[H"     // 커서를 맨 왼쪽 위(0,0)로 이동
 #define ANSI_HIDE_CURSOR "\033[?25l" // 커서 숨기기 (깔끔함 UP)
 #define ANSI_SHOW_CURSOR "\033[?25h" // 커서 보이기 (종료 시 복구용)
+#define ANSI_BOLD       "\033[1m"
+#define ANSI_RESET      "\033[0m"
 
 // CPU 통계 데이터를 담을 구조체
-typedef struct cpu_stats{
+typedef struct cpu_stats {
     unsigned long long user;
     unsigned long long nice;
     unsigned long long system;
@@ -27,11 +32,70 @@ typedef struct cpu_stats{
 } cpu_stats_t;
 
 // 메모리 정보 구조체
-typedef struct mem_stats{
+typedef struct mem_stats {
     unsigned long total;     // kB
     unsigned long available; // kB
     unsigned long used;      // kB
 } mem_stats_t;
+
+// 프로세스 정보 구조체
+typedef struct proc_info {
+    int pid;
+    char name[256]; // 프로세스 이름 (comm)
+    char state;     // 상태 (R:실행중, S:슬립 등)
+    int ppid;       // 부모 프로세스 ID
+} proc_info_t;
+
+// 프로세스 목록 출력 함수
+void print_procs() 
+{
+    DIR *d;
+    struct dirent *dir;
+    
+    d = opendir("/proc");
+    if (!d) return;
+
+    printf("\n%s[ Process List (Top 15) ]%s\n", ANSI_BOLD, ANSI_RESET);
+    printf("%-8s %-6s %-6s %-20s\n", "PID", "PPID", "STATE", "NAME");
+    printf("----------------------------------------\n");
+
+    char *path = (char *)malloc(sizeof(char) * PATH_MAX);
+
+    if (path == NULL) {
+        perror("Failed to allocate memory for path buffer");
+        closedir(d);
+        return;
+    }
+
+    int count = 0;
+    while ((dir = readdir(d)) != NULL) {
+        // 이름이 숫자로 된 것만(프로세스만) 체크
+        if (!isdigit(*dir->d_name)) continue;
+
+        snprintf(path, PATH_MAX, "/proc/%s/stat", dir->d_name);
+
+        FILE *fp = fopen(path, "r");
+        if (fp) {
+            proc_info_t p;
+            // /proc/[pid]/stat 포맷 파싱
+            // 예: 1234 (bash) S 1111 ...
+            // %d: PID, (%[^)]): 괄호 안의 이름, %c: 상태, %d: PPID
+            if (fscanf(fp, "%d (%[^)]) %c %d", &p.pid, p.name, &p.state, &p.ppid) == 4) {
+                printf("%-8d %-6d %-6c %-20s\n", p.pid, p.ppid, p.state, p.name);
+                count++;
+            }
+            fclose(fp);
+        }
+
+        // 화면이 너무 길어지지 않게 상위 15개만 출력하고 멈춤
+        if (count >= 15) break;
+    }
+
+    // 동적할당 해제 (Memory leak 방지)
+    free(path);
+
+    closedir(d);
+}
 
 // /proc/stat 파일을 읽어서 구조체를 구성하는 함수
 void get_cpu_stats(cpu_stats_t* stats) 
@@ -59,7 +123,8 @@ void get_cpu_stats(cpu_stats_t* stats)
 }
 
 // /proc/meminfo 파일을 읽어서 구조체를 구성하는 함수
-void get_memory_stats(mem_stats_t *mem) {
+void get_memory_stats(mem_stats_t *mem) 
+{
     FILE *fp = fopen(PROC_MEMINFO, "r");
     if (!fp) return;
     char buf[256];
@@ -133,13 +198,22 @@ void init_screen()
 }
 
 // 진행바 그리기 함수
-void print_bar(double percent) {
+void print_bar(double percent) 
+{
     int bars = (int)(percent / 5);
     printf("[");
     for (int i = 0; i < 20; i++) {
         printf("%s", (i < bars) ? "#" : " ");
     }
     printf("]");
+}
+
+// 화면 복구 함수 (프로그램 종료 시 호출)
+void cleanup_screen() 
+{
+    printf("%s", ANSI_SHOW_CURSOR); // 커서 다시 보이기
+    printf("%s", ANSI_CLS);         // 종료하면서 화면 지우기 (선택사항)
+    printf("mbtop exited gracefully.\n");
 }
 
 int main() 
@@ -201,6 +275,8 @@ int main()
         printf("Mem Usage : %5.1f%% ", mem_usage_p);
         print_bar(mem_usage_p);
         printf(" (%.0f/%.0f MB)\n", mem_used_mb, mem_total_mb);
+        // 프로세스 목록 출력
+        print_procs();
 
         // 현재 화면 내용보다 짧은 내용이 출력될 경우를 대비해
         // 화면 나머지 부분을 지우는 코드
@@ -211,6 +287,7 @@ int main()
         // 현재 상태를 '이전 상태'로 저장 (다음 루프를 위해)
         prev = curr;
     }
+    cleanup_screen();
 
     return 0;
 }
