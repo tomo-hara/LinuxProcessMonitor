@@ -52,12 +52,12 @@ void print_uptime() {
 }
 
 int main() {
-    // 화면을 지우는 ANSI 이스케이프 코드 (Clear Screen)
+    // 화면을 지우는 ANSI 이스케이프 코드
     printf("\033[H\033[J");
     printf("=== MBTop: Linux Process Monitor (Press Ctrl+C to quit) ===\n\n");
 
     while (1) {
-        // 커서를 위로 올려서 덮어쓰기 효과 (간이 애니메이션)
+        // 커서를 위로 올려서 덮어쓰기 효과
         printf("\033[3;1H"); // 3번째 줄, 1번째 칸으로 이동
         
         print_uptime();
