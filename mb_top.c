@@ -6,6 +6,7 @@
 #define PROC_LOADAVG "/proc/loadavg"
 #define PROC_UPTIME "/proc/uptime"
 #define PROC_STAT "/proc/stat"
+#define PROC_MEMINFO "/proc/meminfo"
 
 // 터미널 제어용 ANSI 코드
 #define ANSI_CLS        "\033[2J"    // 화면 전체 지우기
@@ -25,8 +26,16 @@ typedef struct cpu_stats{
     unsigned long long steal;
 } cpu_stats_t;
 
+// 메모리 정보 구조체
+typedef struct mem_stats{
+    unsigned long total;     // kB
+    unsigned long available; // kB
+    unsigned long used;      // kB
+} mem_stats_t;
+
 // /proc/stat 파일을 읽어서 구조체를 구성하는 함수
-void get_cpu_stats(cpu_stats_t* stats) {
+void get_cpu_stats(cpu_stats_t* stats) 
+{
     FILE* fp = fopen(PROC_STAT, "r");
     if (fp == NULL) {
         perror("Failed to open /proc/stat");
@@ -49,8 +58,29 @@ void get_cpu_stats(cpu_stats_t* stats) {
     fclose(fp);
 }
 
+// /proc/meminfo 파일을 읽어서 구조체를 구성하는 함수
+void get_memory_stats(mem_stats_t *mem) {
+    FILE *fp = fopen(PROC_MEMINFO, "r");
+    if (!fp) return;
+    char buf[256];
+    int found = 0;
+    while (fgets(buf, sizeof(buf), fp)) {
+        if (strncmp(buf, "MemTotal:", 9) == 0) {
+            sscanf(buf, "MemTotal: %lu kB", &mem->total);
+            found++;
+        } else if (strncmp(buf, "MemAvailable:", 13) == 0) {
+            sscanf(buf, "MemAvailable: %lu kB", &mem->available);
+            found++;
+        }
+        if (found >= 2) break;
+    }
+    mem->used = mem->total - mem->available;
+    fclose(fp);
+}
+
 // 1. 시스템 부하(Load Average) 가져오기
-void print_load_average() {
+void print_load_average() 
+{
     FILE* fp = fopen(PROC_LOADAVG, "r");
     if (fp == NULL) {
         perror("Failed to open /proc/loadavg");
@@ -70,7 +100,8 @@ void print_load_average() {
 }
 
 // 2. 시스템 가동 시간(Uptime) 가져오기
-void print_uptime() {
+void print_uptime() 
+{
     FILE* fp = fopen(PROC_UPTIME, "r");
     if (fp == NULL) {
         perror("Failed to open /proc/uptime");
@@ -94,13 +125,25 @@ void print_uptime() {
 }
 
 // 화면 초기화 함수 (프로그램 시작 시 한 번 호출)
-void init_screen() {
+void init_screen() 
+{
     printf("%s", ANSI_CLS);         // 화면 싹 지우기
     printf("%s", ANSI_HIDE_CURSOR); // 커서 숨기기
     fflush(stdout); // 버퍼 비우기 (즉시 반영)
 }
 
-int main() {
+// 진행바 그리기 함수
+void print_bar(double percent) {
+    int bars = (int)(percent / 5);
+    printf("[");
+    for (int i = 0; i < 20; i++) {
+        printf("%s", (i < bars) ? "#" : " ");
+    }
+    printf("]");
+}
+
+int main() 
+{
     init_screen();
 
     cpu_stats_t prev, curr;
@@ -136,23 +179,28 @@ int main() {
         }
         // --- 계산 로직 끝 ---
 
+        // 메모리 정보 가져오기
+        mem_stats_t mem;
+        get_memory_stats(&mem);
+        double mem_total_mb = mem.total / 1024.0;
+        double mem_used_mb = mem.used / 1024.0;
+        double mem_usage_p = (mem_used_mb / mem_total_mb) * 100.0;
+        
         printf("%s", ANSI_HOME);
 
         printf("=== MBTop: Linux Process Monitor (Press Ctrl+C to quit) ===\n\n");
 
         print_uptime();
         print_load_average();
-
+        
         // CPU 바(Bar) 그리기 효과
-        printf("[ CPU Usage] %.1f%% [", cpu_usage);
-        int bars = (int)(cpu_usage / 5);  // 5% 당 막대기 하나
-        for (int i = 0; i < 20; i++) {
-            if (i < bars)
-                printf("#");
-            else
-                printf(" ");
-        }
-        printf("]\n");
+        printf("CPU Usage : %5.1f%% ", cpu_usage);
+        print_bar(cpu_usage);
+        printf("\n");
+        // Mem 바(Bar) 그리기 효과
+        printf("Mem Usage : %5.1f%% ", mem_usage_p);
+        print_bar(mem_usage_p);
+        printf(" (%.0f/%.0f MB)\n", mem_used_mb, mem_total_mb);
 
         // 현재 화면 내용보다 짧은 내용이 출력될 경우를 대비해
         // 화면 나머지 부분을 지우는 코드
